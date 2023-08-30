@@ -1,0 +1,21 @@
+dependencies:
+  espressif/qrcode:
+    component_hash: e07c05f9129250d79c62957c02e2f67d3485e917e6953cbc6637324b3a47ea7f
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 0.1.0
+  espressif/ssd1306:
+    component_hash: bb9d18fd14ba2b11ca7ce426fc059e3ae7c44e7635e3a62eeae9e44c2ca0db46
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 1.0.5
+  idf:
+    component_hash: null
+    source:
+      type: idf
+    version: 5.1.1
+manifest_hash: 1d8e56bb885f6673053d04f8194962e011863163c0ec0e28f77772079941a45c
+target: esp32c3
+version: 1.0.0

@@ -1,0 +1,5 @@
+dependencies:
+  qrcode: "^0.1.0"
+  idf: ">=4.4"
+  ssd1306: "1.0.5"
+
