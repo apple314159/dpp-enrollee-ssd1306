@@ -21,4 +21,4 @@ Optional configuration available
 
 ### Example output
 
-![alt text](https://github.com/apple314159/dpp-enrollee-ssd1306/dpp_panel.jpg "Startup display")
+![alt text](https://github.com/apple314159/dpp-enrollee-ssd1306/blob/main/dpp_panel.jpg "Startup display")
