@@ -16,9 +16,11 @@
 #include "esp_dpp.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "qrcode.h"
 
 #include "ssd1306.h"
+
 
 #ifdef CONFIG_ESP_DPP_LISTEN_CHANNEL
 #define EXAMPLE_DPP_LISTEN_CHANNEL_LIST     CONFIG_ESP_DPP_LISTEN_CHANNEL_LIST
@@ -40,8 +42,16 @@
 
 #define CURVE_SEC256R1_PKEY_HEX_DIGITS     64
 
+#define SSID_KEY "ssid"
+#define PASSWORD_KEY "password"
+
 static const char *TAG = "wifi dpp-enrollee";
 wifi_config_t s_dpp_wifi_config;
+nvs_handle_t my_handle = 0;
+char ssid[33];
+size_t ssid_len = 32;
+char password[64];
+size_t password_len = 63;
 
 static int s_retry_num = 0;
 
@@ -81,7 +91,7 @@ static void display_init() {
     ssd1306_refresh_gram(ssd1306_dev);
 }
 
-void display_qr(esp_qrcode_handle_t qrcode) {
+static void display_qr(esp_qrcode_handle_t qrcode) {
     int size = esp_qrcode_get_size(qrcode);
     int border = 2;
     int offset = (SSD1306_HEIGHT-size)/2;
@@ -101,11 +111,41 @@ void display_qr(esp_qrcode_handle_t qrcode) {
     ssd1306_refresh_gram(ssd1306_dev);
 }
 
+static void wifi_connected() {
+    esp_err_t err = nvs_flash_init();
+
+    ssd1306_clear_screen(ssd1306_dev, 0x00);
+    ssd1306_draw_string(ssd1306_dev, 4, 16, (const uint8_t *)"WiFi connected!", 16, 1);
+    ssd1306_draw_string(ssd1306_dev, 4, 36, (const uint8_t *)s_dpp_wifi_config.sta.ssid, 16, 1);
+    ssd1306_refresh_gram(ssd1306_dev);
+
+    // save SSID and password in nvs
+    if (strncmp((char *)s_dpp_wifi_config.sta.ssid, ssid, sizeof(ssid)) == 0) {
+	err = nvs_set_str(my_handle, SSID_KEY, (const char *) s_dpp_wifi_config.sta.ssid);
+	if (err) {
+	    ESP_ERROR_CHECK(err);
+	} else
+	    strncpy(ssid, (char *) s_dpp_wifi_config.sta.ssid, sizeof(ssid));
+    }
+    if (strncmp((char *)s_dpp_wifi_config.sta.password, password, sizeof(password)) == 0) {
+	err = nvs_set_str(my_handle, PASSWORD_KEY, (const char *) s_dpp_wifi_config.sta.password);
+	if (err) {
+	    ESP_ERROR_CHECK(err);
+	} else
+	    strncpy(password, (char *) s_dpp_wifi_config.sta.password, sizeof(password));
+    }
+}
+
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
+	if (ssid[0] == 0) {
+	    ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
+	} else {
+	    esp_wifi_set_config(ESP_IF_WIFI_STA, &s_dpp_wifi_config);
+	    esp_wifi_connect();
+	}
         ESP_LOGI(TAG, "Started listening for DPP Authentication");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < 5) {
@@ -166,26 +206,29 @@ void dpp_enrollee_event_cb(esp_supp_dpp_event_t event, void *data)
 esp_err_t dpp_enrollee_bootstrap(void)
 {
     esp_err_t ret;
-    size_t pkey_len = strlen(EXAMPLE_DPP_BOOTSTRAPPING_KEY);
     char *key = NULL;
+#if 0
+    size_t pkey_len = strlen(EXAMPLE_DPP_BOOTSTRAPPING_KEY);
 
-    if (pkey_len) {
-        /* Currently only NIST P-256 curve is supported, add prefix/postfix accordingly */
-        char prefix[] = "30310201010420";
-        char postfix[] = "a00a06082a8648ce3d030107";
-
-        if (pkey_len != CURVE_SEC256R1_PKEY_HEX_DIGITS) {
-            ESP_LOGI(TAG, "Invalid key length! Private key needs to be 32 bytes (or 64 hex digits) long");
-            return ESP_FAIL;
-        }
-
-        key = malloc(sizeof(prefix) + pkey_len + sizeof(postfix));
-        if (!key) {
-            ESP_LOGI(TAG, "Failed to allocate for bootstrapping key");
-            return ESP_ERR_NO_MEM;
-        }
-        sprintf(key, "%s%s%s", prefix, EXAMPLE_DPP_BOOTSTRAPPING_KEY, postfix);
+    if (pkey_len == 0) {
+	return -1;
     }
+    /* Currently only NIST P-256 curve is supported, add prefix/postfix accordingly */
+    char prefix[] = "30310201010420";
+    char postfix[] = "a00a06082a8648ce3d030107";
+
+    if (pkey_len != CURVE_SEC256R1_PKEY_HEX_DIGITS) {
+	ESP_LOGI(TAG, "Invalid key length! Private key needs to be 32 bytes (or 64 hex digits) long");
+	return ESP_FAIL;
+    }
+
+    key = malloc(sizeof(prefix) + pkey_len + sizeof(postfix));
+    if (!key) {
+	ESP_LOGI(TAG, "Failed to allocate for bootstrapping key");
+	return ESP_ERR_NO_MEM;
+    }
+    sprintf(key, "%s%s%s", prefix, EXAMPLE_DPP_BOOTSTRAPPING_KEY, postfix);
+#endif
 
     /* Currently only supported method is QR Code */
     ret = esp_supp_dpp_bootstrap_gen(EXAMPLE_DPP_LISTEN_CHANNEL_LIST, DPP_BOOTSTRAP_QR_CODE,
@@ -212,8 +255,10 @@ void dpp_enrollee_init(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_supp_dpp_init(dpp_enrollee_event_cb));
-    ESP_ERROR_CHECK(dpp_enrollee_bootstrap());
+    if (ssid[0] == 0) {
+	ESP_ERROR_CHECK(esp_supp_dpp_init(dpp_enrollee_event_cb));
+	ESP_ERROR_CHECK(dpp_enrollee_bootstrap());
+    }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
@@ -228,17 +273,14 @@ void dpp_enrollee_init(void)
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
     if (bits & DPP_CONNECTED_BIT) {
-	ssd1306_clear_screen(ssd1306_dev, 0x00);
-	ssd1306_draw_string(ssd1306_dev, 4, 16, (const uint8_t *)"WiFi connected!", 16, 1);
-	ssd1306_draw_string(ssd1306_dev, 4, 36, (const uint8_t *)s_dpp_wifi_config.sta.ssid, 16, 1);
-	ssd1306_refresh_gram(ssd1306_dev);
+	wifi_connected();
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
     } else if (bits & DPP_CONNECT_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
+        ESP_LOGW(TAG, "Failed to connect to SSID:%s, password:%s",
                  s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
     } else if (bits & DPP_AUTH_FAIL_BIT) {
-        ESP_LOGI(TAG, "DPP Authentication failed after %d retries", s_retry_num);
+        ESP_LOGW(TAG, "DPP Authentication failed after %d retries", s_retry_num);
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
@@ -251,15 +293,65 @@ void dpp_enrollee_init(void)
 
 void app_main(void)
 {
-    //Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
     display_init();
 
+    //Initialize NVS
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    // check if we have an SSDID and password in storage
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+	ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+    } else {
+	int allgood = 0;
+        // Read
+	ESP_LOGI(TAG, "Reading SSID from NVS ... ");
+        nvs_get_str(my_handle, SSID_KEY, NULL, &ssid_len);
+        err = nvs_get_str(my_handle, SSID_KEY, ssid, &ssid_len);
+        switch (err) {
+            case ESP_OK:
+		ESP_LOGI(TAG, "ssid: %s", ssid);
+		allgood++;
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                ESP_LOGI(TAG, "The value is not initialized yet!");
+                break;
+            default :
+                ESP_LOGW(TAG, "Error (%s) reading!\n", esp_err_to_name(err));
+        }
+
+        nvs_get_str(my_handle, PASSWORD_KEY, NULL, &password_len);
+        err = nvs_get_str(my_handle, PASSWORD_KEY, password, &password_len);
+        switch (err) {
+            case ESP_OK:
+                ESP_LOGI(TAG, "password: %s\n", password);
+		allgood++;
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                ESP_LOGI(TAG, "The value is not initialized yet!");
+                break;
+            default :
+                ESP_LOGW(TAG, "Error (%s) reading!", esp_err_to_name(err));
+        }
+
+	if (allgood == 2) {
+	    memset(&s_dpp_wifi_config, 0, sizeof s_dpp_wifi_config);
+	    strcpy((char *) s_dpp_wifi_config.sta.ssid, ssid);
+	    strncpy((char *) s_dpp_wifi_config.sta.password, password, sizeof(password));
+	    s_retry_num = 0;
+	    //esp_wifi_set_config(ESP_IF_WIFI_STA, &s_dpp_wifi_config);
+	    //esp_wifi_connect();
+	}
+    }
+
     dpp_enrollee_init();
+    while (1) {
+	vTaskDelay(1000);
+    }
+
 }
